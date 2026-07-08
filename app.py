@@ -880,26 +880,57 @@ async def fetch_models(channel_id: str, request: Request):
         return sorted(matches, key=score, reverse=True)[0]
 
     def _pick_status_for_option(option, pricing_row, status_summary):
-        labels = []
         model_id = option.get("id") or ""
+        if not model_id:
+            return None
         route, clean_model_id = _route_and_model(model_id)
-        if model_id:
-            labels.append(model_id)
-        if clean_model_id and clean_model_id != model_id:
-            labels.append(clean_model_id)
-        if route:
-            labels.append(route)
+
+        def _exact(a, b):
+            na, nb = _norm_match(a), _norm_match(b)
+            return bool(na and nb and na == nb)
+
+        group_labels = _channel_label_candidates()
         if pricing_row:
-            if pricing_row.get("route"):
-                labels.append(pricing_row["route"])
-            labels.extend(pricing_row.get("groups") or [])
-        labels.extend(_channel_label_candidates())
-        labels = [label for label in labels if label and len(_norm_match(label)) >= 2]
-        for status in status_summary:
-            status_name = status.get("name") or ""
-            if any(_loose_match(label, status_name) for label in labels):
-                return status
-        return None
+            if pricing_row.get("group"):
+                group_labels.append(pricing_row["group"])
+            group_labels.extend(pricing_row.get("groups") or [])
+
+        def _best_by_group(candidates):
+            if len(candidates) <= 1:
+                return candidates[0] if candidates else None
+            def group_score(status):
+                group_name = status.get("group") or ""
+                return 1 if any(_loose_match(label, group_name) for label in group_labels if label) else 0
+            return sorted(candidates, key=group_score, reverse=True)[0]
+
+        # 优先找"全名"精确对上号的——不少中转站的价位分档就是直接烧在完整模型名里
+        # （比如同一个 claude-opus-4-8 会有 [特价MAX-CC]claude-opus-4-8 / [特价次kiro]claude-opus-4-8
+        # 这种不同分档的完整名字），这种情况下全名本身已经是唯一的，不需要再去猜。
+        exact_candidates = [
+            status for status in status_summary
+            if _exact(status.get("name") or "", model_id) or _exact(status.get("name") or "", clean_model_id)
+        ]
+        if exact_candidates:
+            return _best_by_group(exact_candidates)
+
+        # 兜底：全名对不上号，说明这个站可能是"裸模型名一样、只靠分组区分"的类型
+        # （比如模型就叫 opus-4-8，分组1/分组2/分组3 才是区分依据），退回宽松子串匹配，
+        # 但如果宽松匹配出多个候选，也用分组信息挑最贴的一个，不再是"列表里排前面的先到先得"。
+        loose_labels = [model_id]
+        if clean_model_id and clean_model_id != model_id:
+            loose_labels.append(clean_model_id)
+        if route:
+            loose_labels.append(route)
+        if pricing_row and pricing_row.get("route"):
+            loose_labels.append(pricing_row["route"])
+        loose_labels.extend(group_labels)
+        loose_labels = [label for label in loose_labels if label and len(_norm_match(label)) >= 2]
+
+        loose_candidates = [
+            status for status in status_summary
+            if any(_loose_match(label, status.get("name") or "") for label in loose_labels)
+        ]
+        return _best_by_group(loose_candidates)
 
     def _model_option(item):
         if isinstance(item, str):
