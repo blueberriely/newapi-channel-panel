@@ -571,9 +571,6 @@ async def fetch_models(channel_id: str, request: Request):
         window = row.get("time_window")
         if window:
             parts.append(str(window))
-        current = row.get("current_status")
-        if current:
-            parts.append(str(current))
         return " · ".join(parts)
 
     def _format_duration(seconds):
