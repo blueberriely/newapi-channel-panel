@@ -310,18 +310,30 @@ async def fetch_models(channel_id: str, request: Request):
         if factor is None:
             factor = Decimal("1")
 
+        # NewAPI/One-API 生态的约定：model_ratio=1 对应每 1M tokens $2（沿用自最早
+        # gpt-3.5-turbo 的基准价）。站方前端渲染价格时都会拿 model_ratio 再乘这个 2
+        # 才是真实美元价，这里之前漏乘了，导致所有按量计费模型显示的价格是实际的一半。
+        # quota_type=1（按次）不受影响，model_price 本身已经是绝对金额。
+        BASE_RATE_PER_MILLION = Decimal("2")
+
         def _with_group(value):
             number = _decimal_value(value)
             if number is None:
                 return None
             return number * factor
 
+        def _with_group_rate(value):
+            number = _decimal_value(value)
+            if number is None:
+                return None
+            return number * factor * BASE_RATE_PER_MILLION
+
         def _derived_price(multiplier):
             base = _decimal_value(model_ratio)
             factor_inner = _decimal_value(multiplier)
             if base is None or factor_inner is None:
                 return _format_price_value(multiplier)
-            return _format_decimal(base * factor_inner * factor)
+            return _format_decimal(base * factor_inner * factor * BASE_RATE_PER_MILLION)
 
         if str(quota_type) == "1" and model_price not in (None, ""):
             adjusted = _with_group(model_price)
@@ -329,7 +341,7 @@ async def fetch_models(channel_id: str, request: Request):
 
         parts = []
         if model_ratio not in (None, ""):
-            adjusted_input = _with_group(model_ratio)
+            adjusted_input = _with_group_rate(model_ratio)
             parts.append(f"输入 {_format_decimal(adjusted_input)}" if adjusted_input is not None else f"输入 {_format_price_value(model_ratio)}")
         if completion_ratio not in (None, ""):
             parts.append(f"输出 {_derived_price(completion_ratio)}")

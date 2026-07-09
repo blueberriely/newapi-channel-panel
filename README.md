@@ -39,8 +39,8 @@ uvicorn app:app --host 0.0.0.0 --port 8787
 
 **两种计费方式**（看接口返回的 `quota_type`）：
 
-- `quota_type == 1`：按次计费，直接用 `model_price` 字段，显示成 `按次 X`
-- 其它情况：按量计费，用 `model_ratio`（输入的基准倍率）分别乘上 `completion_ratio` / `cache_ratio` / `create_cache_ratio` 算出输出/缓存/写入相对输入的倍数，拼成 `输入 X / 输出 Y / 缓存 Z / 写入 W`
+- `quota_type == 1`：按次计费，直接用 `model_price` 字段（已经是绝对金额），显示成 `按次 X`
+- 其它情况：按量计费，`model_ratio` 是相对基准价的倍率，换算成美元要乘以 NewAPI/One-API 生态的基准价 `$2 / 1M tokens`（这个基准沿用自最早 gpt-3.5-turbo 的定价，几乎所有基于这套开源面板搭的站都遵循这个约定，站方前端自己渲染价格时也是这么换算的）。脚本按 `model_ratio × 2` 算出输入价，再拿 `completion_ratio` / `cache_ratio` / `create_cache_ratio` 分别乘上输入价算出输出/缓存/写入，拼成 `输入 X / 输出 Y / 缓存 Z / 写入 W`（单位都是美元 / 1M tokens）
 
 **按你的计费分组调价**：`/api/pricing` 的返回里还有个 `group_ratio` 字典，是站方给不同计费分组（比如 `vip`/`default`）设的整体折扣倍率。脚本会尝试猜你这个渠道属于哪个分组——做法是把渠道名字按常见分隔符（` · ` / ` \| ` / ` / ` / `｜`）拆开，和 `group_ratio` 里的分组名做匹配（先找完全一样的，找不到再找互相包含的）。**这意味着渠道名字最好把分组名带上才能生效**——比如渠道叫"小鸡农场 · 小鸡 default"，脚本就是靠拆出来的 "default" 这个词去匹配 `group_ratio` 里的 `default` 分组的。一个都没匹配上就当倍率是 1，显示官方原价。
 
