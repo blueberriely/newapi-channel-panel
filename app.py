@@ -895,7 +895,7 @@ async def fetch_models(channel_id: str, request: Request):
         model_id = option.get("id") or ""
         if not model_id:
             return None
-        route, clean_model_id = _route_and_model(model_id)
+        _, clean_model_id = _route_and_model(model_id)
 
         def _exact(a, b):
             na, nb = _norm_match(a), _norm_match(b)
@@ -915,34 +915,34 @@ async def fetch_models(channel_id: str, request: Request):
                 return 1 if any(_loose_match(label, group_name) for label in group_labels if label) else 0
             return sorted(candidates, key=group_score, reverse=True)[0]
 
-        # 优先找"全名"精确对上号的——不少中转站的价位分档就是直接烧在完整模型名里
-        # （比如同一个 claude-opus-4-8 会有 [特价MAX-CC]claude-opus-4-8 / [特价次kiro]claude-opus-4-8
-        # 这种不同分档的完整名字），这种情况下全名本身已经是唯一的，不需要再去猜。
-        exact_candidates = [
+        # 第一层：带路由前缀的"全名"精确对上号——这是最具体的一层。不少中转站的
+        # 价位分档就是直接烧在完整模型名里（比如同一个 claude-opus-4-8 会有
+        # [特价MAX-CC]claude-opus-4-8 / [特价次kiro]claude-opus-4-8 这种不同分档的
+        # 完整名字），而且同一个底层模型的不同路由实测可用率可能天差地别（实测过
+        # 同一个 claude-opus-4-6，两个路由一个 97% 一个 0%），全名对上了就该直接用，
+        # 不能再退到更笼统的匹配把它和别的路由混在一起。
+        full_candidates = [
             status for status in status_summary
-            if _exact(status.get("name") or "", model_id) or _exact(status.get("name") or "", clean_model_id)
+            if _exact(status.get("name") or "", model_id)
         ]
-        if exact_candidates:
-            return _best_by_group(exact_candidates)
+        if full_candidates:
+            return _best_by_group(full_candidates)
 
-        # 兜底：全名对不上号，说明这个站可能是"裸模型名一样、只靠分组区分"的类型
-        # （比如模型就叫 opus-4-8，分组1/分组2/分组3 才是区分依据），退回宽松子串匹配，
-        # 但如果宽松匹配出多个候选，也用分组信息挑最贴的一个，不再是"列表里排前面的先到先得"。
-        loose_labels = [model_id]
-        if clean_model_id and clean_model_id != model_id:
-            loose_labels.append(clean_model_id)
-        if route:
-            loose_labels.append(route)
-        if pricing_row and pricing_row.get("route"):
-            loose_labels.append(pricing_row["route"])
-        loose_labels.extend(group_labels)
-        loose_labels = [label for label in loose_labels if label and len(_norm_match(label)) >= 2]
-
-        loose_candidates = [
+        # 第二层：全名没有专属监控，退一步找"去掉路由前缀后的裸模型名"精确匹配——
+        # 用于监控只按底层模型整体挂、不区分路由的站（好几个不同定价路由背后复用
+        # 同一个真实上游模型，站方也就只监控了那一个真实模型）。
+        clean_candidates = [
             status for status in status_summary
-            if any(_loose_match(label, status.get("name") or "") for label in loose_labels)
+            if clean_model_id and _exact(status.get("name") or "", clean_model_id)
         ]
-        return _best_by_group(loose_candidates)
+        if clean_candidates:
+            return _best_by_group(clean_candidates)
+
+        # 两层精确匹配都没有，说明这个站的监控是按"分组/路由"整体挂的，不是按单个
+        # 模型挂的（同一条监控背后可能是好几个不同版本、甚至不同厂商的模型）。这种
+        # 情况下拿路由/分组这些词去做子串模糊匹配只会瞎绑——之前试过，会把 opus 绑到
+        # sonnet、把 Claude 绑到 Gemini 的监控上。宁可这个模型不带 status 字段，也不要绑错。
+        return None
 
     def _model_option(item):
         if isinstance(item, str):
